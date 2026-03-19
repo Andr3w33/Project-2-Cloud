@@ -2,9 +2,20 @@ const { app } = require('@azure/functions');
 const { BlobServiceClient } = require('@azure/storage-blob');
 
 app.http('getNutritionalData', {
-    methods: ['GET'],
+    methods: ['GET', 'OPTIONS'], // Allow OPTIONS for preflight
     authLevel: 'anonymous',
     handler: async (request, context) => {
+        // Explicitly handle CORS to ensure the frontend can read the payload
+        const headers = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type'
+        };
+
+        if (request.method === 'OPTIONS') {
+            return { status: 204, headers };
+        }
+
         const startTime = performance.now();
         try {
             const connectionString = process.env.STORAGE_CONNECTION_STRING;
@@ -46,13 +57,16 @@ app.http('getNutritionalData', {
             const endTime = performance.now();
             return {
                 status: 200,
+                headers, // Inject CORS headers into success response
                 jsonBody: {
                     dietAverages,
                     dietDistribution,
                     correlations,
+                    clusters: calculateKMeans(rawData),
                     rawData: rawData.map(d => ({
                         recipe: d.Recipe_name,
                         diet: d.Diet_type,
+                        cuisine: d.Cuisine_type || '',
                         protein: d["Protein(g)"],
                         carbs: d["Carbs(g)"],
                         fat: d["Fat(g)"]
@@ -61,7 +75,7 @@ app.http('getNutritionalData', {
                 }
             };
         } catch (error) {
-            return { status: 500, jsonBody: { error: error.message } };
+            return { status: 500, headers, jsonBody: { error: error.message } };
         }
     }
 });
@@ -70,6 +84,8 @@ function calculateCorrelations(data) {
     const keys = ["Protein(g)", "Carbs(g)", "Fat(g)"];
     const labels = ["Protein", "Carbs", "Fat"];
     let matrix = [];
+
+    if (!data || data.length === 0) return matrix;
 
     labels.forEach((yLabel, yIdx) => {
         labels.forEach((xLabel, xIdx) => {
@@ -82,11 +98,12 @@ function calculateCorrelations(data) {
 
 function getPearson(data, key1, key2) {
     const n = data.length;
+    if (n === 0) return 0; // Prevent division by zero
     let sum1 = 0, sum2 = 0, sum1Sq = 0, sum2Sq = 0, pSum = 0;
     for (let d of data) {
-        sum1 += d[key1]; sum2 += d[key2];
-        sum1Sq += Math.pow(d[key1], 2); sum2Sq += Math.pow(d[key2], 2);
-        pSum += d[key1] * d[key2];
+        sum1 += d[key1] || 0; sum2 += d[key2] || 0;
+        sum1Sq += Math.pow(d[key1] || 0, 2); sum2Sq += Math.pow(d[key2] || 0, 2);
+        pSum += (d[key1] || 0) * (d[key2] || 0);
     }
     const num = pSum - (sum1 * sum2 / n);
     const den = Math.sqrt((sum1Sq - Math.pow(sum1, 2) / n) * (sum2Sq - Math.pow(sum2, 2) / n));
@@ -100,4 +117,85 @@ async function streamToString(readableStream) {
         readableStream.on("end", () => resolve(chunks.join("")));
         readableStream.on("error", reject);
     });
+}
+
+function calculateKMeans(data) {
+    if (!data || data.length === 0) return [];
+    let points = data.map(d => [
+        d["Protein(g)"] || 0,
+        d["Carbs(g)"] || 0,
+        d["Fat(g)"] || 0
+    ]);
+    
+    // Normalize
+    const maxs = [0, 0, 0];
+    points.forEach(p => {
+        if (p[0] > maxs[0]) maxs[0] = p[0];
+        if (p[1] > maxs[1]) maxs[1] = p[1];
+        if (p[2] > maxs[2]) maxs[2] = p[2];
+    });
+
+    const k = 3;
+    let centroids = [
+        [maxs[0] * 0.2, maxs[1] * 0.8, maxs[2] * 0.2], // High carb target
+        [maxs[0] * 0.8, maxs[1] * 0.2, maxs[2] * 0.2], // High protein target
+        [maxs[0] * 0.2, maxs[1] * 0.2, maxs[2] * 0.8]  // High fat target
+    ];
+
+    let assignments = new Array(points.length).fill(-1);
+    for (let iter = 0; iter < 10; iter++) {
+        let changed = false;
+        for (let i = 0; i < points.length; i++) {
+            let minDist = Infinity;
+            let best = 0;
+            for (let c = 0; c < k; c++) {
+                const d0 = (points[i][0] - centroids[c][0]) / (maxs[0] || 1);
+                const d1 = (points[i][1] - centroids[c][1]) / (maxs[1] || 1);
+                const d2 = (points[i][2] - centroids[c][2]) / (maxs[2] || 1);
+                const dist = d0*d0 + d1*d1 + d2*d2;
+                if (dist < minDist) { minDist = dist; best = c; }
+            }
+            if (assignments[i] !== best) { assignments[i] = best; changed = true; }
+        }
+        if (!changed) break;
+
+        const newC = [[0,0,0],[0,0,0],[0,0,0]];
+        const counts = [0,0,0];
+        for (let i = 0; i < points.length; i++) {
+            const c = assignments[i];
+            counts[c]++;
+            newC[c][0] += points[i][0];
+            newC[c][1] += points[i][1];
+            newC[c][2] += points[i][2];
+        }
+        for (let c = 0; c < k; c++) {
+            if (counts[c] > 0) {
+                centroids[c][0] = newC[c][0] / counts[c];
+                centroids[c][1] = newC[c][1] / counts[c];
+                centroids[c][2] = newC[c][2] / counts[c];
+            }
+        }
+    }
+
+    const clusters = [
+        { name: 'Cluster 1 (High Carb)', count: 0, p: 0, c: 0, f: 0 },
+        { name: 'Cluster 2 (High Protein)', count: 0, p: 0, c: 0, f: 0 },
+        { name: 'Cluster 3 (High Fat)', count: 0, p: 0, c: 0, f: 0 }
+    ];
+
+    for (let i = 0; i < points.length; i++) {
+        const c = assignments[i];
+        clusters[c].count++;
+        clusters[c].p += points[i][0];
+        clusters[c].c += points[i][1];
+        clusters[c].f += points[i][2];
+    }
+    
+    return clusters.map(c => ({
+        name: c.name,
+        count: c.count,
+        protein: c.count ? (c.p / c.count).toFixed(1) : 0,
+        carbs: c.count ? (c.c / c.count).toFixed(1) : 0,
+        fat: c.count ? (c.f / c.count).toFixed(1) : 0
+    }));
 }
