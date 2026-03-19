@@ -34,7 +34,13 @@ app.http('getNutritionalData', {
                 fat: (dietTotals[type].f / dietTotals[type].count).toFixed(1)
             }));
 
-            // 2. Correlation Matrix (Heatmap Data)
+            // 2. Pie Chart Data (Distribution)
+            const dietDistribution = rawData.reduce((acc, curr) => {
+                acc[curr.Diet_type] = (acc[curr.Diet_type] || 0) + 1;
+                return acc;
+            }, {});
+
+            // 3. Correlation Matrix (Heatmap Data)
             const correlations = calculateCorrelations(rawData);
 
             const endTime = performance.now();
@@ -42,6 +48,7 @@ app.http('getNutritionalData', {
                 status: 200,
                 jsonBody: {
                     dietAverages,
+                    dietDistribution,
                     correlations,
                     rawData: rawData.map(d => ({
                         recipe: d.Recipe_name,

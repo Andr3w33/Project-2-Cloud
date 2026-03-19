@@ -4,6 +4,8 @@ import {
   PieChart, Pie, Cell, ScatterChart, Scatter
 } from 'recharts';
 
+const COLORS = ['#2563eb', '#16a34a', '#7c3aed', '#db2777'];
+
 function App() {
   // Existing filter states
   const [searchTerm, setSearchTerm] = useState('');
@@ -43,6 +45,49 @@ function App() {
     fetchNutritionalData();
   }, []);
 
+  // --- Data Transformations ---
+  // Pie Chart: convert { "vegan": 50, "keto": 30 } object into [{ name, value }] array
+  const pieData = (dashboardData && dashboardData.dietDistribution) ? Object.keys(dashboardData.dietDistribution).map(key => ({
+    name: key,
+    value: dashboardData.dietDistribution[key]
+  })) : [];
+
+  // Bar Chart: .toFixed() returns strings, Recharts needs numbers
+  const barData = (dashboardData && dashboardData.dietAverages) ? dashboardData.dietAverages.map(d => ({
+    ...d,
+    protein: parseFloat(d.protein),
+    carbs: parseFloat(d.carbs),
+    fat: parseFloat(d.fat)
+  })) : [];
+
+  // Heatmap renderer using the correlation matrix from the backend
+  const renderHeatmap = () => {
+    if (!dashboardData || !dashboardData.correlations) return <span className="text-gray-400">Loading...</span>;
+    return (
+      <div className="grid grid-cols-4 gap-1 text-xs text-center h-full">
+        <div className="font-bold p-1"></div>
+        <div className="font-bold p-1 border-b flex items-center justify-center">Protein</div>
+        <div className="font-bold p-1 border-b flex items-center justify-center">Carbs</div>
+        <div className="font-bold p-1 border-b flex items-center justify-center">Fat</div>
+        {['Protein', 'Carbs', 'Fat'].map(yLabel => (
+          <React.Fragment key={yLabel}>
+            <div className="font-bold p-1 border-r flex items-center justify-center">{yLabel}</div>
+            {['Protein', 'Carbs', 'Fat'].map(xLabel => {
+              const cell = dashboardData.correlations.find(c => c.x === xLabel && c.y === yLabel);
+              const val = parseFloat(cell?.value || 0);
+              const bg = val > 0 ? `rgba(37, 99, 235, ${Math.abs(val)})` : `rgba(219, 39, 119, ${Math.abs(val)})`;
+              return (
+                <div key={xLabel} className="p-1 flex items-center justify-center rounded" style={{ backgroundColor: bg, color: Math.abs(val) > 0.5 ? 'white' : 'black' }}>
+                  {cell?.value}
+                </div>
+              );
+            })}
+          </React.Fragment>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="bg-gray-100 min-h-screen font-sans text-gray-900">
 
@@ -62,8 +107,19 @@ function App() {
             <div className="bg-white p-4 shadow-lg rounded-lg">
               <h3 className="font-semibold text-lg">Bar Chart</h3>
               <p className="text-sm text-gray-600 mb-2">Average macronutrient content by diet type.</p>
-              <div className="w-full h-48 bg-gray-50 flex items-center justify-center border border-dashed border-gray-300 rounded">
-                <span className="text-gray-400">Chart rendering here...</span>
+              <div className="w-full h-48">
+                {dashboardData && (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={barData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="diet_type" />
+                      <Tooltip />
+                      <Bar dataKey="protein" fill="#2563eb" name="Protein" />
+                      <Bar dataKey="carbs" fill="#16a34a" name="Carbs" />
+                      <Bar dataKey="fat" fill="#7c3aed" name="Fat" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
               </div>
             </div>
 
@@ -71,8 +127,18 @@ function App() {
             <div className="bg-white p-4 shadow-lg rounded-lg">
               <h3 className="font-semibold text-lg">Scatter Plot</h3>
               <p className="text-sm text-gray-600 mb-2">Nutrient relationships (e.g., protein vs carbs).</p>
-              <div className="w-full h-48 bg-gray-50 flex items-center justify-center border border-dashed border-gray-300 rounded">
-                <span className="text-gray-400">Chart rendering here...</span>
+              <div className="w-full h-48">
+                {dashboardData && (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ScatterChart>
+                      <CartesianGrid />
+                      <XAxis type="number" dataKey="protein" name="protein" unit="g" />
+                      <YAxis type="number" dataKey="carbs" name="carbs" unit="g" />
+                      <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+                      <Scatter name="Recipes" data={dashboardData.rawData} fill="#db2777" />
+                    </ScatterChart>
+                  </ResponsiveContainer>
+                )}
               </div>
             </div>
 
@@ -80,8 +146,8 @@ function App() {
             <div className="bg-white p-4 shadow-lg rounded-lg">
               <h3 className="font-semibold text-lg">Heatmap</h3>
               <p className="text-sm text-gray-600 mb-2">Nutrient correlations.</p>
-              <div className="w-full h-48 bg-gray-50 flex items-center justify-center border border-dashed border-gray-300 rounded">
-                <span className="text-gray-400">Chart rendering here...</span>
+              <div className="w-full h-48 flex flex-col justify-center">
+                {renderHeatmap()}
               </div>
             </div>
 
@@ -89,8 +155,19 @@ function App() {
             <div className="bg-white p-4 shadow-lg rounded-lg">
               <h3 className="font-semibold text-lg">Pie Chart</h3>
               <p className="text-sm text-gray-600 mb-2">Recipe distribution by diet type.</p>
-              <div className="w-full h-48 bg-gray-50 flex items-center justify-center border border-dashed border-gray-300 rounded">
-                <span className="text-gray-400">Chart rendering here...</span>
+              <div className="w-full h-48">
+                {dashboardData && (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={50} label>
+                        {pieData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip />
+                    </PieChart>
+                  </ResponsiveContainer>
+                )}
               </div>
             </div>
 
