@@ -466,7 +466,7 @@ function Dashboard() {
         <p className="text-sm mt-1 opacity-70">
           {analyticsLoading ? 'Fetching data from Azure...' :
             analyticsError ? `Error: ${analyticsError}` :
-              analyticsData ? `Backend Execution Time: ${analyticsData.metadata?.executionTimeMs} | Source: ${analyticsData.metadata?.source}` :
+              analyticsData ? `Backend Execution Time: ${analyticsData.metadata?.executionTimeMs} | Source: ${analyticsData.metadata?.source}${analyticsData.metadata?.cacheUpdatedAt ? ` | Cache Updated: ${new Date(analyticsData.metadata.cacheUpdatedAt).toLocaleString()}` : ''}` :
                 'No data available'}
         </p>
       </footer>
